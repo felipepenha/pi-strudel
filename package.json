@@ -1,0 +1,46 @@
+{
+  "name": "@felipepenha/pi-strudel",
+  "version": "0.1.0",
+  "description": "Live-coding Strudel music REPL and AI co-composer package for Pi coding agent",
+  "keywords": ["pi-package", "strudel", "tidalcycles", "live-coding", "algorave", "music"],
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/felipepenha/pi-strudel.git"
+  },
+  "pi": {
+    "extensions": ["extensions/strudel/index.ts"],
+    "skills": ["skills/*/SKILL.md"]
+  },
+  "scripts": {
+    "postinstall": "node -e \"const fs=require('fs');const p='./node_modules/@kabelsalat/web/package.json';if(fs.existsSync(p)){const j=JSON.parse(fs.readFileSync(p,'utf8'));if(!j.exports){j.exports={import:'./dist/index.mjs',require:'./dist/index.js',default:'./dist/index.mjs'};fs.writeFileSync(p,JSON.stringify(j,null,2));}}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "pi -e ."
+  },
+  "dependencies": {
+    "@strudel/core": "^1.1.0",
+    "@strudel/mini": "^1.1.0",
+    "@strudel/transpiler": "^1.1.0",
+    "@strudel/tonal": "^1.1.0",
+    "@strudel/osc": "^1.1.0",
+    "@strudel/xen": "^1.1.0",
+    "acorn": "^8.12.0",
+    "node-web-audio-api": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.0.0",
+    "@earendil-works/pi-tui": ">=1.0.0",
+    "@sinclair/typebox": ">=0.32.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "latest",
+    "@sinclair/typebox": "latest",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
