@@ -1,7 +1,9 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
 import { globalStateStore, type SerializedStrudelState } from "./engine/state-store.js";
 import { globalReplEngine } from "./engine/repl-engine.js";
 import { globalAudioBridge } from "./engine/audio-bridge.js";
+import { handleInputEvent } from "./router/input-interceptor.js";
+import { renderReplWidget } from "./ui/repl-widget.js";
 
 export default function (pi: ExtensionAPI) {
   // 1. Session start: restore last "strudel/state" custom entry from branch if present
@@ -12,6 +14,7 @@ export default function (pi: ExtensionAPI) {
       if (entry.type === "custom" && entry.customType === "strudel/state" && entry.data) {
         globalStateStore.deserialize(entry.data as SerializedStrudelState);
         globalReplEngine.recompileAll();
+        renderReplWidget(ctx, globalStateStore, globalReplEngine.getCurrentCycle());
         break;
       }
     }
@@ -26,6 +29,7 @@ export default function (pi: ExtensionAPI) {
       if (entry.type === "custom" && entry.customType === "strudel/state" && entry.data) {
         globalStateStore.deserialize(entry.data as SerializedStrudelState);
         globalReplEngine.recompileAll();
+        renderReplWidget(ctx, globalStateStore, globalReplEngine.getCurrentCycle());
         restored = true;
         break;
       }
@@ -33,6 +37,7 @@ export default function (pi: ExtensionAPI) {
     if (!restored) {
       globalStateStore.reset();
       globalReplEngine.recompileAll();
+      renderReplWidget(ctx, globalStateStore, globalReplEngine.getCurrentCycle());
     }
   });
 
@@ -40,5 +45,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     globalReplEngine.stop();
     await globalAudioBridge.dispose();
+  });
+
+  // 4. Zero-latency Strudel code input interception
+  pi.on("input", async (event: InputEvent, ctx: ExtensionContext) => {
+    return handleInputEvent(event, ctx, pi, globalStateStore, globalReplEngine);
   });
 }
