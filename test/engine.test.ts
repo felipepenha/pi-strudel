@@ -168,7 +168,7 @@ describe("Phase 3: Strudel Pattern Engine", () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Polyphony cap guarantees active synth voices never saturate CoreAudio
-    expect((bridge as any).activeSynthVoices.size).toBeLessThanOrEqual(14);
+    expect((bridge as any).activeSynthVoices.size).toBeLessThanOrEqual(8);
 
     engine.stop();
     await bridge.dispose();

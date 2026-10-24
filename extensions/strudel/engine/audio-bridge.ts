@@ -48,21 +48,7 @@ export class AudioBridge {
         // Master Gain Bus
         this.masterGain = ctx.createGain();
         this.masterGain.gain.setValueAtTime(0.45, ctx.currentTime);
-
-        // Brickwall Limiter to prevent clipping / distortion bursts
-        this.limiter = (ctx as any).createDynamicsCompressor?.() || null;
-        if (this.limiter) {
-          this.limiter.threshold.setValueAtTime(-2.0, ctx.currentTime);
-          this.limiter.knee.setValueAtTime(0.0, ctx.currentTime);
-          this.limiter.ratio.setValueAtTime(20.0, ctx.currentTime);
-          this.limiter.attack.setValueAtTime(0.002, ctx.currentTime);
-          this.limiter.release.setValueAtTime(0.08, ctx.currentTime);
-
-          this.masterGain.connect(this.limiter);
-          this.limiter.connect(ctx.destination);
-        } else {
-          this.masterGain.connect(ctx.destination);
-        }
+        this.masterGain.connect(ctx.destination);
 
         this.createNoiseBuffer();
       } catch (err) {
@@ -432,75 +418,47 @@ export class AudioBridge {
     this.drumVoices.get("cp")?.(time);
 
     if (!this.noiseBuffer) return;
-    const offsets = [0, 0.012, 0.024];
-    for (const offset of offsets) {
-      const noise = ctx.createBufferSource();
-      noise.buffer = this.noiseBuffer;
 
-      const filter = ctx.createBiquadFilter();
-      filter.type = "bandpass";
-      filter.frequency.setValueAtTime(1200, time + offset);
+    const noise = ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
 
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0, time + offset);
-      gain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.5), time + offset + 0.002);
-      gain.gain.linearRampToValueAtTime(0, time + offset + 0.04);
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(1100, time);
 
-      noise.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.getMasterBus(ctx));
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.7), time + 0.002);
+    gain.gain.linearRampToValueAtTime(0, time + 0.15);
 
-      noise.onended = () => {
-        try {
-          noise.disconnect();
-          filter.disconnect();
-          gain.disconnect();
-        } catch {}
-      };
-
-      noise.start(time + offset);
-      noise.stop(time + offset + 0.05);
-    }
-
-    // Tail
-    const tailNoise = ctx.createBufferSource();
-    tailNoise.buffer = this.noiseBuffer;
-    const tailFilter = ctx.createBiquadFilter();
-    tailFilter.type = "bandpass";
-    tailFilter.frequency.setValueAtTime(1000, time + 0.03);
-    const tailGain = ctx.createGain();
-    tailGain.gain.setValueAtTime(0, time + 0.03);
-    tailGain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.6), time + 0.032);
-    tailGain.gain.linearRampToValueAtTime(0, time + 0.22);
-
-    tailNoise.connect(tailFilter);
-    tailFilter.connect(tailGain);
-    tailGain.connect(this.getMasterBus(ctx));
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.getMasterBus(ctx));
 
     const stopFn = (fadeTime: number) => {
       try {
         const ft = Math.max(ctx.currentTime, fadeTime);
-        tailGain.gain.cancelScheduledValues(ft);
-        tailGain.gain.setValueAtTime(tailGain.gain.value, ft);
-        tailGain.gain.linearRampToValueAtTime(0, ft + 0.003);
-        tailNoise.stop(ft + 0.005);
+        gain.gain.cancelScheduledValues(ft);
+        gain.gain.setValueAtTime(gain.gain.value, ft);
+        gain.gain.linearRampToValueAtTime(0, ft + 0.003);
+        noise.stop(ft + 0.005);
       } catch {}
     };
     this.drumVoices.set("cp", stopFn);
 
-    tailNoise.onended = () => {
+    noise.onended = () => {
       try {
-        tailNoise.disconnect();
-        tailFilter.disconnect();
-        tailGain.disconnect();
+        noise.disconnect();
+        filter.disconnect();
+        gain.disconnect();
       } catch {}
       if (this.drumVoices.get("cp") === stopFn) {
         this.drumVoices.delete("cp");
       }
     };
 
-    tailNoise.start(time + 0.03);
-    tailNoise.stop(time + 0.23);
+    noise.start(time);
+    noise.stop(time + 0.16);
   }
 
   private playRimshot(ctx: AudioContext, time: number, gainVal: number): void {
@@ -610,8 +568,8 @@ export class AudioBridge {
     hap?: any,
     safeCps: number = 0.5
   ): void {
-    // Polyphony cap: maximum 14 concurrent synth voices prevents CoreAudio buffer underruns
-    if (this.activeSynthVoices.size >= 14) {
+    // Polyphony cap: maximum 8 concurrent synth voices prevents CoreAudio buffer underruns
+    if (this.activeSynthVoices.size >= 8) {
       const oldest = this.activeSynthVoices.values().next().value;
       if (oldest) {
         oldest(time);
@@ -621,15 +579,13 @@ export class AudioBridge {
 
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
 
     // Sound type & instrument shaping
     const sType = String(val.s || "sawtooth").toLowerCase();
-    let defaultCutoff = 4000;
     let attack = typeof val.attack === "number" ? Math.max(0.005, Math.min(1.0, val.attack)) : 0.01;
     let decay = typeof val.decay === "number" ? Math.max(0.01, Math.min(2.0, val.decay)) : 0.15;
     let sustain = typeof val.sustain === "number" ? Math.max(0.0, Math.min(1.0, val.sustain)) : 0.5;
-    let release = typeof val.release === "number" ? Math.max(0.01, Math.min(2.0, val.release)) : 0.1;
+    let release = typeof val.release === "number" ? Math.max(0.01, Math.min(2.0, val.release)) : 0.08;
 
     if (["sine", "square", "sawtooth", "triangle"].includes(sType)) {
       osc.type = sType as OscillatorType;
@@ -638,38 +594,45 @@ export class AudioBridge {
       attack = 0.005;
       decay = 0.4;
       sustain = 0.2;
-      defaultCutoff = 6000;
     } else if (sType.includes("bass")) {
       osc.type = "triangle";
-      defaultCutoff = 900;
     } else if (sType.includes("violin") || sType.includes("strings") || sType.includes("pad")) {
       osc.type = "sawtooth";
       attack = 0.05;
       sustain = 0.7;
-      release = 0.3;
-      defaultCutoff = 2500;
+      release = 0.2;
     } else {
       osc.type = "sawtooth";
     }
 
     osc.frequency.setValueAtTime(freq, time);
 
-    // Filter
-    const rawCutoff = typeof val.cutoff === "number" ? val.cutoff : (typeof val.lpf === "number" ? val.lpf : defaultCutoff);
-    const cutoff = Math.max(40, Math.min(18000, rawCutoff));
-    const rawRes = typeof val.resonance === "number" ? val.resonance : (typeof val.lpq === "number" ? val.lpq : 1);
-    const resonance = Math.max(0.1, Math.min(15, rawRes));
+    // Only instantiate BiquadFilter if cutoff / lpf is explicitly requested (saves 50% DSP load)
+    const hasFilter = typeof val.cutoff === "number" || typeof val.lpf === "number";
+    let filter: any = null;
+    if (hasFilter) {
+      const rawCutoff = typeof val.cutoff === "number" ? val.cutoff : val.lpf;
+      const cutoff = Math.max(40, Math.min(18000, rawCutoff));
+      const rawRes = typeof val.resonance === "number" ? val.resonance : (typeof val.lpq === "number" ? val.lpq : 1);
+      const resonance = Math.max(0.1, Math.min(15, rawRes));
 
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(cutoff, time);
-    filter.Q.setValueAtTime(resonance, time);
+      filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(cutoff, time);
+      filter.Q.setValueAtTime(resonance, time);
+
+      osc.connect(filter);
+      filter.connect(gain);
+    } else {
+      osc.connect(gain);
+    }
 
     // Compute true note duration from Strudel hap
     const rawDur = hap?.duration ?? (hap?.whole ? Number(hap.whole.end) - Number(hap.whole.begin) : 0.25);
     const hapDurationCycles = Number(rawDur) || 0.25;
     const calculatedDuration = typeof val.duration === "number"
       ? val.duration
-      : Math.max(0.04, Math.min(2.0, hapDurationCycles / safeCps));
+      : Math.max(0.04, Math.min(1.5, hapDurationCycles / safeCps));
     const noteDuration = calculatedDuration;
 
     // Strictly monotonic timeline:
@@ -691,8 +654,6 @@ export class AudioBridge {
     }
     gain.gain.linearRampToValueAtTime(0, t4);
 
-    osc.connect(filter);
-    filter.connect(gain);
     gain.connect(this.getMasterBus(ctx));
 
     const stopFn = (fadeTime: number) => {
@@ -709,7 +670,7 @@ export class AudioBridge {
     osc.onended = () => {
       try {
         osc.disconnect();
-        filter.disconnect();
+        if (filter) filter.disconnect();
         gain.disconnect();
       } catch {}
       this.activeSynthVoices.delete(stopFn);
