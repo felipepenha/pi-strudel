@@ -109,4 +109,32 @@ describe("Phase 3: Strudel Pattern Engine", () => {
 
     await bridge.dispose();
   });
+
+  it("inspects drum values for sd:1 and perc", () => {
+    const store = new StateStore();
+    const engine = new ReplEngine(store);
+    const r1 = engine.compileTrack('s("~ [sd:1,cp] ~ [sd:1,cp]")');
+    const haps1 = r1.pattern.queryArc(0, 1);
+    console.log("SD:1 HAPS:", haps1.map((h: any) => h.value));
+  });
+
+  it("plays live 5 tracks for 1 second without errors", async () => {
+    const store = new StateStore();
+    const bridge = new AudioBridge("node");
+    const engine = new ReplEngine(store, bridge);
+
+    store.setTrack("kick", 's("bd [~ bd] ~ [~ bd] bd ~ ~ [~ bd]").bank("RolandTR909")');
+    store.setTrack("snare", 's("~ [sd:1,cp] ~ [sd:1,cp] ~ [sd:1,cp] ~ [sd:1 [~ sd:1]]").bank("RolandTR909")');
+    store.setTrack("hats", 's("hh*8 [hh*4 [~ oh]]").cut(1).bank("RolandTR909")');
+    store.setTrack("perc", 's("rim(3,8,2), [~ cb]?0.5").bank("RolandTR808")');
+    store.setTrack("bass", 'note("<[c2 ~ c2 ~] [c2 ~ eb2 f2] [g2 ~ g2 ~] [bb1 ~ g1 bb1]>").s("sawtooth").lpf(800).lpq(3).decay(0.25).sustain(0.2)');
+
+    engine.recompileAll();
+    engine.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    engine.stop();
+    await bridge.dispose();
+  });
 });

@@ -35,28 +35,29 @@ export class AudioBridge {
   private initAudioContext(): AudioContext | null {
     if (!this.audioCtx) {
       try {
-        this.audioCtx = new AudioContext();
-        if (this.audioCtx.state === "suspended") {
-          this.audioCtx.resume().catch(() => {});
+        const ctx: AudioContext = new (AudioContext as any)({ latencyHint: "playback" });
+        this.audioCtx = ctx;
+        if (ctx.state === "suspended") {
+          ctx.resume().catch(() => {});
         }
 
         // Master Gain Bus
-        this.masterGain = this.audioCtx.createGain();
-        this.masterGain.gain.setValueAtTime(0.45, this.audioCtx.currentTime);
+        this.masterGain = ctx.createGain();
+        this.masterGain.gain.setValueAtTime(0.45, ctx.currentTime);
 
         // Brickwall Limiter to prevent clipping / distortion bursts
-        this.limiter = (this.audioCtx as any).createDynamicsCompressor?.() || null;
+        this.limiter = (ctx as any).createDynamicsCompressor?.() || null;
         if (this.limiter) {
-          this.limiter.threshold.setValueAtTime(-2.0, this.audioCtx.currentTime);
-          this.limiter.knee.setValueAtTime(0.0, this.audioCtx.currentTime);
-          this.limiter.ratio.setValueAtTime(20.0, this.audioCtx.currentTime);
-          this.limiter.attack.setValueAtTime(0.002, this.audioCtx.currentTime);
-          this.limiter.release.setValueAtTime(0.08, this.audioCtx.currentTime);
+          this.limiter.threshold.setValueAtTime(-2.0, ctx.currentTime);
+          this.limiter.knee.setValueAtTime(0.0, ctx.currentTime);
+          this.limiter.ratio.setValueAtTime(20.0, ctx.currentTime);
+          this.limiter.attack.setValueAtTime(0.002, ctx.currentTime);
+          this.limiter.release.setValueAtTime(0.08, ctx.currentTime);
 
           this.masterGain.connect(this.limiter);
-          this.limiter.connect(this.audioCtx.destination);
+          this.limiter.connect(ctx.destination);
         } else {
-          this.masterGain.connect(this.audioCtx.destination);
+          this.masterGain.connect(ctx.destination);
         }
 
         this.createNoiseBuffer();
@@ -75,6 +76,15 @@ export class AudioBridge {
       return this.masterGain;
     }
     return ctx.destination;
+  }
+
+  hush(): void {
+    if (this.masterGain && this.audioCtx) {
+      try {
+        this.masterGain.gain.setValueAtTime(0, this.audioCtx.currentTime);
+        this.masterGain.gain.setValueAtTime(0.45, this.audioCtx.currentTime + 0.05);
+      } catch {}
+    }
   }
 
   private createNoiseBuffer(): void {
@@ -233,6 +243,13 @@ export class AudioBridge {
     osc.connect(gain);
     gain.connect(this.getMasterBus(ctx));
 
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        gain.disconnect();
+      } catch {}
+    };
+
     osc.start(time);
     osc.stop(time + dur + 0.01);
   }
@@ -249,6 +266,14 @@ export class AudioBridge {
     oscGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.12);
     osc.connect(oscGain);
     oscGain.connect(this.getMasterBus(ctx));
+
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        oscGain.disconnect();
+      } catch {}
+    };
+
     osc.start(time);
     osc.stop(time + 0.13);
 
@@ -267,6 +292,14 @@ export class AudioBridge {
       noise.connect(filter);
       filter.connect(noiseGain);
       noiseGain.connect(this.getMasterBus(ctx));
+
+      noise.onended = () => {
+        try {
+          noise.disconnect();
+          filter.disconnect();
+          noiseGain.disconnect();
+        } catch {}
+      };
 
       noise.start(time);
       noise.stop(time + dur + 0.01);
@@ -292,6 +325,14 @@ export class AudioBridge {
     filter.connect(gain);
     gain.connect(this.getMasterBus(ctx));
 
+    noise.onended = () => {
+      try {
+        noise.disconnect();
+        filter.disconnect();
+        gain.disconnect();
+      } catch {}
+    };
+
     noise.start(time);
     noise.stop(time + dur + 0.01);
   }
@@ -315,6 +356,14 @@ export class AudioBridge {
       filter.connect(gain);
       gain.connect(this.getMasterBus(ctx));
 
+      noise.onended = () => {
+        try {
+          noise.disconnect();
+          filter.disconnect();
+          gain.disconnect();
+        } catch {}
+      };
+
       noise.start(time + offset);
       noise.stop(time + offset + 0.05);
     }
@@ -333,6 +382,14 @@ export class AudioBridge {
     tailFilter.connect(tailGain);
     tailGain.connect(this.getMasterBus(ctx));
 
+    tailNoise.onended = () => {
+      try {
+        tailNoise.disconnect();
+        tailFilter.disconnect();
+        tailGain.disconnect();
+      } catch {}
+    };
+
     tailNoise.start(time + 0.03);
     tailNoise.stop(time + 0.23);
   }
@@ -349,6 +406,13 @@ export class AudioBridge {
 
     osc.connect(gain);
     gain.connect(this.getMasterBus(ctx));
+
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        gain.disconnect();
+      } catch {}
+    };
 
     osc.start(time);
     osc.stop(time + 0.05);
@@ -377,6 +441,15 @@ export class AudioBridge {
     osc2.connect(filter);
     filter.connect(gain);
     gain.connect(this.getMasterBus(ctx));
+
+    osc1.onended = () => {
+      try {
+        osc1.disconnect();
+        osc2.disconnect();
+        filter.disconnect();
+        gain.disconnect();
+      } catch {}
+    };
 
     osc1.start(time);
     osc2.start(time);
@@ -460,6 +533,14 @@ export class AudioBridge {
     osc.connect(filter);
     filter.connect(gain);
     gain.connect(this.getMasterBus(ctx));
+
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        filter.disconnect();
+        gain.disconnect();
+      } catch {}
+    };
 
     osc.start(t0);
     osc.stop(t4 + 0.02);

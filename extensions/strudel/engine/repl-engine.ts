@@ -244,6 +244,7 @@ export class ReplEngine {
       clearInterval(this.schedulerTimer);
       this.schedulerTimer = null;
     }
+    this.audioBridge.hush();
     this.currentCycle = this.getCurrentCycle();
   }
 
