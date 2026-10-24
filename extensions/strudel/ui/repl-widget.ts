@@ -2,6 +2,34 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { StateStore } from "../engine/state-store.js";
 import { renderProgressBar } from "./ascii-meter.js";
 
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function truncateAnsi(str: string, maxVisible: number): string {
+  if (stripAnsi(str).length <= maxVisible) {
+    return str;
+  }
+  let visible = 0;
+  let out = "";
+  let i = 0;
+  while (i < str.length && visible < maxVisible - 3) {
+    if (str[i] === "\x1b" && str[i + 1] === "[") {
+      const end = str.indexOf("m", i);
+      if (end !== -1) {
+        out += str.slice(i, end + 1);
+        i = end + 1;
+        continue;
+      }
+    }
+    out += str[i];
+    visible++;
+    i++;
+  }
+  return out + "...\x1b[0m";
+}
+
 export class ReplWidgetRenderer {
   private visible = true;
   private timer: NodeJS.Timeout | null = null;
@@ -48,11 +76,16 @@ export class ReplWidgetRenderer {
           prefix = "\x1b[90m[MUTED]\x1b[0m ";
         }
 
-        const highlightedCode = highlightTrack
+        const rawHighlighted = highlightTrack
           ? highlightTrack(id, track.code)
           : track.code;
 
-        body.push(`│ ${idCol} │ ${prefix}${highlightedCode}`);
+        // Flatten all newlines and excessive whitespace into a single line
+        const singleLine = rawHighlighted.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+        // Truncate to maximum 65 visible columns to prevent line-wrapping across terminal rows
+        const truncatedCode = truncateAnsi(singleLine, 65);
+
+        body.push(`│ ${idCol} │ ${prefix}${truncatedCode}`);
       }
     }
 

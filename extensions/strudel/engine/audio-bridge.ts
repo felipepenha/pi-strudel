@@ -158,7 +158,7 @@ export class AudioBridge {
     // Dynamic polyphonic headroom scaling
     const polyScale = activeHaps.length > 3 ? Math.sqrt(3 / activeHaps.length) : 1.0;
 
-    const baseLookahead = 0.03; // 30ms lookahead for smooth jitter-free WebAudio scheduling
+    const baseLookahead = 0.05; // 50ms lookahead provides safety margin against buffer underruns
     const isCycleNumber = typeof referenceCycle === "number" && referenceCycle < 100000;
     const refCycle = isCycleNumber ? referenceCycle : 0;
     const safeCps = Math.max(0.01, cps);
@@ -168,7 +168,7 @@ export class AudioBridge {
         const hapBegin = Number(hap.whole?.begin ?? hap.part?.begin ?? refCycle);
         const cycleDelta = Math.max(0, hapBegin - refCycle);
         const timeOffsetSec = isCycleNumber ? cycleDelta / safeCps : 0;
-        const scheduledTime = Math.max(ctx.currentTime + 0.015, ctx.currentTime + baseLookahead + timeOffsetSec);
+        const scheduledTime = Math.max(ctx.currentTime + 0.02, ctx.currentTime + baseLookahead + timeOffsetSec);
 
         this.playHapNodeAudio(ctx, hap, scheduledTime, polyScale);
       } catch (e) {
@@ -246,7 +246,9 @@ export class AudioBridge {
     osc.frequency.setValueAtTime(startFreq, time);
     osc.frequency.exponentialRampToValueAtTime(endFreq, time + decay);
 
-    gain.gain.setValueAtTime(Math.max(0.0001, gainVal), time);
+    // Micro-fade attack eliminates click discontinuity at note onset
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal), time + 0.002);
     gain.gain.linearRampToValueAtTime(0, time + dur);
 
     osc.connect(gain);
@@ -271,7 +273,8 @@ export class AudioBridge {
     const oscGain = ctx.createGain();
     osc.frequency.setValueAtTime(180, time);
     osc.frequency.exponentialRampToValueAtTime(80, time + 0.1);
-    oscGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.7), time);
+    oscGain.gain.setValueAtTime(0, time);
+    oscGain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.7), time + 0.002);
     oscGain.gain.linearRampToValueAtTime(0, time + 0.12);
     osc.connect(oscGain);
     oscGain.connect(this.getMasterBus(ctx));
@@ -295,7 +298,8 @@ export class AudioBridge {
       filter.frequency.setValueAtTime(1000, time);
 
       const noiseGain = ctx.createGain();
-      noiseGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.8), time);
+      noiseGain.gain.setValueAtTime(0, time);
+      noiseGain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.8), time + 0.002);
       noiseGain.gain.linearRampToValueAtTime(0, time + dur);
 
       noise.connect(filter);
@@ -327,7 +331,8 @@ export class AudioBridge {
     filter.frequency.setValueAtTime(7500, time);
 
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(Math.max(0.0001, gainVal * (open ? 0.5 : 0.35)), time);
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * (open ? 0.5 : 0.35)), time + 0.002);
     gain.gain.linearRampToValueAtTime(0, time + dur);
 
     noise.connect(filter);
@@ -358,7 +363,8 @@ export class AudioBridge {
       filter.frequency.setValueAtTime(1200, time + offset);
 
       const gain = ctx.createGain();
-      gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.5), time + offset);
+      gain.gain.setValueAtTime(0, time + offset);
+      gain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.5), time + offset + 0.002);
       gain.gain.linearRampToValueAtTime(0, time + offset + 0.04);
 
       noise.connect(filter);
@@ -384,7 +390,8 @@ export class AudioBridge {
     tailFilter.type = "bandpass";
     tailFilter.frequency.setValueAtTime(1000, time + 0.03);
     const tailGain = ctx.createGain();
-    tailGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.6), time + 0.03);
+    tailGain.gain.setValueAtTime(0, time + 0.03);
+    tailGain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.6), time + 0.032);
     tailGain.gain.linearRampToValueAtTime(0, time + 0.22);
 
     tailNoise.connect(tailFilter);
@@ -410,7 +417,8 @@ export class AudioBridge {
     osc.frequency.setValueAtTime(1600, time);
     osc.frequency.exponentialRampToValueAtTime(400, time + 0.03);
 
-    gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.6), time);
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.6), time + 0.002);
     gain.gain.linearRampToValueAtTime(0, time + 0.04);
 
     osc.connect(gain);
@@ -443,7 +451,8 @@ export class AudioBridge {
     filter.frequency.setValueAtTime(1000, time);
     filter.Q.setValueAtTime(3, time);
 
-    gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.5), time);
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(Math.max(0.0001, gainVal * 0.5), time + 0.002);
     gain.gain.linearRampToValueAtTime(0, time + dur);
 
     osc1.connect(filter);
