@@ -116,6 +116,14 @@ describe("Phase 3: Strudel Pattern Engine", () => {
     const r1 = engine.compileTrack('s("~ [sd:1,cp] ~ [sd:1,cp]")');
     const haps1 = r1.pattern.queryArc(0, 1);
     console.log("SD:1 HAPS:", haps1.map((h: any) => h.value));
+
+    const r2 = engine.compileTrack('s("bd")');
+    const h1 = r2.pattern.queryArc(0.00, 0.02).filter((h: any) => h.hasOnset?.());
+    const h2 = r2.pattern.queryArc(0.02, 0.04).filter((h: any) => h.hasOnset?.());
+    const h3 = r2.pattern.queryArc(0.04, 0.06).filter((h: any) => h.hasOnset?.());
+    console.log("Onsets in [0.00, 0.02]:", h1.length);
+    console.log("Onsets in [0.02, 0.04]:", h2.length);
+    console.log("Onsets in [0.04, 0.06]:", h3.length);
   });
 
   it("plays live 5 tracks for 1 second without errors", async () => {
@@ -136,5 +144,34 @@ describe("Phase 3: Strudel Pattern Engine", () => {
 
     engine.stop();
     await bridge.dispose();
+  });
+
+  it("plays live 92bpm hip-hop beat with sustained chords without voice explosion", async () => {
+    const store = new StateStore();
+    const bridge = new AudioBridge("node");
+    let dispatchedHapCount = 0;
+    const origDispatch = bridge.dispatchHaps.bind(bridge);
+    bridge.dispatchHaps = (haps: any[], ref?: any, cps?: any) => {
+      dispatchedHapCount += haps.length;
+      origDispatch(haps, ref, cps);
+    };
+
+    const engine = new ReplEngine(store, bridge);
+    store.setCps(0.3833);
+    store.setTrack("drums", 'stack(s("bd ~ [~ bd] ~"), s("~ sd ~ sd"), s("hh*8"), s("~ ~ ~ [~ oh]").cut(1))');
+    store.setTrack("bass", 'note("<[c2 ~ c2 eb2] [f2 ~ ~ f2]>").s("sawtooth")');
+    store.setTrack("chords", 'note("<[c3,eb3,g3,bb3] [f3,ab3,c4,eb4]>").s("triangle").decay(0.9)');
+
+    engine.recompileAll();
+    engine.start();
+
+    // Run for 1.2 seconds (~1/2 cycle at 92 BPM)
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    engine.stop();
+    await bridge.dispose();
+
+    // With hasOnset filtering, in 1/2 cycle there should be ~15-20 distinct onsets (NOT hundreds!)
+    expect(dispatchedHapCount).toBeLessThan(35);
   });
 });

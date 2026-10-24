@@ -142,9 +142,18 @@ export class AudioBridge {
     const ctx = this.initAudioContext();
     if (!ctx) return;
 
+    // Filter to onset-only events: ignore continuous slices of already-sounding haps
+    const onsetsOnly = haps.filter((hap: any) => {
+      if (typeof hap.hasOnset === "function") {
+        return hap.hasOnset();
+      }
+      return true;
+    });
+    if (onsetsOnly.length === 0) return;
+
     // Polyphonic voice limiter to avoid event bursts / lag spikes
     const MAX_VOICES_PER_TICK = 16;
-    const activeHaps = haps.length > MAX_VOICES_PER_TICK ? haps.slice(0, MAX_VOICES_PER_TICK) : haps;
+    const activeHaps = onsetsOnly.length > MAX_VOICES_PER_TICK ? onsetsOnly.slice(0, MAX_VOICES_PER_TICK) : onsetsOnly;
 
     // Dynamic polyphonic headroom scaling
     const polyScale = activeHaps.length > 3 ? Math.sqrt(3 / activeHaps.length) : 1.0;

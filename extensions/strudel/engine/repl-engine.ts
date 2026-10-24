@@ -269,8 +269,23 @@ export class ReplEngine {
       try {
         const haps = this.masterPattern.queryArc(this.lastDispatchedCycle, nowCycle);
         if (haps && haps.length > 0) {
-          const cps = this.stateStore.getCps() || 0.5;
-          this.audioBridge.dispatchHaps(haps, this.lastDispatchedCycle, cps);
+          // Discrete event scheduler: ONLY trigger notes/hits on their onset!
+          // Strudel's queryArc returns continuous slices of sustained haps across every tick.
+          // Without hasOnset filtering, a 1-cycle note is re-triggered 40+ times per second!
+          const onsetHaps = haps.filter((hap: any) => {
+            if (typeof hap.hasOnset === "function") {
+              return hap.hasOnset();
+            }
+            if (hap.whole && hap.part) {
+              return Number(hap.whole.begin) >= Number(hap.part.begin);
+            }
+            return true;
+          });
+
+          if (onsetHaps.length > 0) {
+            const cps = this.stateStore.getCps() || 0.5;
+            this.audioBridge.dispatchHaps(onsetHaps, this.lastDispatchedCycle, cps);
+          }
         }
       } catch (err) {
         console.error("Error during master pattern dispatch:", err);
