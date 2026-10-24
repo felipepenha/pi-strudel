@@ -247,7 +247,7 @@ export class AudioBridge {
     osc.frequency.exponentialRampToValueAtTime(endFreq, time + decay);
 
     gain.gain.setValueAtTime(Math.max(0.0001, gainVal), time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    gain.gain.linearRampToValueAtTime(0, time + dur);
 
     osc.connect(gain);
     gain.connect(this.getMasterBus(ctx));
@@ -272,7 +272,7 @@ export class AudioBridge {
     osc.frequency.setValueAtTime(180, time);
     osc.frequency.exponentialRampToValueAtTime(80, time + 0.1);
     oscGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.7), time);
-    oscGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.12);
+    oscGain.gain.linearRampToValueAtTime(0, time + 0.12);
     osc.connect(oscGain);
     oscGain.connect(this.getMasterBus(ctx));
 
@@ -296,7 +296,7 @@ export class AudioBridge {
 
       const noiseGain = ctx.createGain();
       noiseGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.8), time);
-      noiseGain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+      noiseGain.gain.linearRampToValueAtTime(0, time + dur);
 
       noise.connect(filter);
       filter.connect(noiseGain);
@@ -328,7 +328,7 @@ export class AudioBridge {
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(Math.max(0.0001, gainVal * (open ? 0.5 : 0.35)), time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    gain.gain.linearRampToValueAtTime(0, time + dur);
 
     noise.connect(filter);
     filter.connect(gain);
@@ -359,7 +359,7 @@ export class AudioBridge {
 
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.5), time + offset);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + offset + 0.04);
+      gain.gain.linearRampToValueAtTime(0, time + offset + 0.04);
 
       noise.connect(filter);
       filter.connect(gain);
@@ -385,7 +385,7 @@ export class AudioBridge {
     tailFilter.frequency.setValueAtTime(1000, time + 0.03);
     const tailGain = ctx.createGain();
     tailGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.6), time + 0.03);
-    tailGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.22);
+    tailGain.gain.linearRampToValueAtTime(0, time + 0.22);
 
     tailNoise.connect(tailFilter);
     tailFilter.connect(tailGain);
@@ -411,7 +411,7 @@ export class AudioBridge {
     osc.frequency.exponentialRampToValueAtTime(400, time + 0.03);
 
     gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.6), time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.04);
+    gain.gain.linearRampToValueAtTime(0, time + 0.04);
 
     osc.connect(gain);
     gain.connect(this.getMasterBus(ctx));
@@ -444,7 +444,7 @@ export class AudioBridge {
     filter.Q.setValueAtTime(3, time);
 
     gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.5), time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    gain.gain.linearRampToValueAtTime(0, time + dur);
 
     osc1.connect(filter);
     osc2.connect(filter);
@@ -531,13 +531,13 @@ export class AudioBridge {
     const t3 = Math.max(t2, t0 + noteDuration);
     const t4 = t3 + release;
 
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(baseGain, t1);
-    gain.gain.exponentialRampToValueAtTime(susGain, t2);
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(baseGain, t1);
+    gain.gain.linearRampToValueAtTime(susGain, t2);
     if (t3 > t2) {
       gain.gain.setValueAtTime(susGain, t3);
     }
-    gain.gain.exponentialRampToValueAtTime(0.0001, t4);
+    gain.gain.linearRampToValueAtTime(0, t4);
 
     osc.connect(filter);
     filter.connect(gain);

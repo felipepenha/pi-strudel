@@ -87,12 +87,12 @@ export class ReplWidgetRenderer {
     highlightTrack?: (id: string, code: string) => string
   ): void {
     this.stopRenderLoop();
-    // 25 FPS = 40ms interval
+    // 5 FPS = 200ms interval (prevents terminal screen tearing / event-loop starvation)
     this.timer = setInterval(() => {
       if (stateStore.isPlaying() && this.visible) {
         this.render(ctx, stateStore, getCycle(), highlightTrack);
       }
-    }, 40);
+    }, 200);
   }
 
   stopRenderLoop(): void {
