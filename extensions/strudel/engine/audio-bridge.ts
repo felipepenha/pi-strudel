@@ -13,6 +13,10 @@ export class AudioBridge {
   private wss: WebSocketServer | null = null;
   private udpSocket: dgram.Socket | null = null;
 
+  // Voice management to prevent voice compounding / buffer underruns
+  private activeSynthVoices: Set<(fadeTime: number) => void> = new Set();
+  private drumVoices: Map<string, (fadeTime: number) => void> = new Map();
+
   constructor(mode: AudioMode = "node") {
     this.mode = mode;
   }
@@ -85,6 +89,16 @@ export class AudioBridge {
         this.masterGain.gain.setValueAtTime(0.45, this.audioCtx.currentTime + 0.05);
       } catch {}
     }
+    const now = this.audioCtx?.currentTime ?? 0;
+    for (const stop of this.drumVoices.values()) {
+      try { stop(now); } catch {}
+    }
+    this.drumVoices.clear();
+
+    for (const stop of this.activeSynthVoices) {
+      try { stop(now); } catch {}
+    }
+    this.activeSynthVoices.clear();
   }
 
   private createNoiseBuffer(): void {
@@ -158,7 +172,7 @@ export class AudioBridge {
     // Dynamic polyphonic headroom scaling
     const polyScale = activeHaps.length > 3 ? Math.sqrt(3 / activeHaps.length) : 1.0;
 
-    const baseLookahead = 0.05; // 50ms lookahead provides safety margin against buffer underruns
+    const baseLookahead = 0.06; // 60ms lookahead provides safety margin against buffer underruns
     const isCycleNumber = typeof referenceCycle === "number" && referenceCycle < 100000;
     const refCycle = isCycleNumber ? referenceCycle : 0;
     const safeCps = Math.max(0.01, cps);
@@ -170,14 +184,14 @@ export class AudioBridge {
         const timeOffsetSec = isCycleNumber ? cycleDelta / safeCps : 0;
         const scheduledTime = Math.max(ctx.currentTime + 0.02, ctx.currentTime + baseLookahead + timeOffsetSec);
 
-        this.playHapNodeAudio(ctx, hap, scheduledTime, polyScale);
+        this.playHapNodeAudio(ctx, hap, scheduledTime, polyScale, safeCps);
       } catch (e) {
         // Voice failure should not crash scheduler
       }
     }
   }
 
-  private playHapNodeAudio(ctx: AudioContext, hap: any, scheduledTime: number, polyScale: number): void {
+  private playHapNodeAudio(ctx: AudioContext, hap: any, scheduledTime: number, polyScale: number, safeCps: number): void {
     const val = hap.value || {};
     const rawGain = typeof val.gain === "number" ? Math.max(0, Math.min(val.gain, 1.5)) : 0.4;
     const gainVal = Math.max(0.001, rawGain * polyScale);
@@ -230,11 +244,14 @@ export class AudioBridge {
     }
 
     if (freq >= 20 && freq <= 12000) {
-      this.playSynthNote(ctx, scheduledTime, freq, gainVal, val);
+      this.playSynthNote(ctx, scheduledTime, freq, gainVal, val, hap, safeCps);
     }
   }
 
   private playKick(ctx: AudioContext, time: number, gainVal: number, val: any): void {
+    // Choke previous kick to eliminate low-end mud & overlapping voice compounding
+    this.drumVoices.get("bd")?.(time);
+
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
@@ -254,11 +271,25 @@ export class AudioBridge {
     osc.connect(gain);
     gain.connect(this.getMasterBus(ctx));
 
+    const stopFn = (fadeTime: number) => {
+      try {
+        const ft = Math.max(ctx.currentTime, fadeTime);
+        gain.gain.cancelScheduledValues(ft);
+        gain.gain.setValueAtTime(gain.gain.value, ft);
+        gain.gain.linearRampToValueAtTime(0, ft + 0.003);
+        osc.stop(ft + 0.005);
+      } catch {}
+    };
+    this.drumVoices.set("bd", stopFn);
+
     osc.onended = () => {
       try {
         osc.disconnect();
         gain.disconnect();
       } catch {}
+      if (this.drumVoices.get("bd") === stopFn) {
+        this.drumVoices.delete("bd");
+      }
     };
 
     osc.start(time);
@@ -266,6 +297,9 @@ export class AudioBridge {
   }
 
   private playSnare(ctx: AudioContext, time: number, gainVal: number, _val: any): void {
+    // Choke previous snare
+    this.drumVoices.get("sd")?.(time);
+
     const dur = 0.2;
 
     // Body tone
@@ -279,15 +313,8 @@ export class AudioBridge {
     osc.connect(oscGain);
     oscGain.connect(this.getMasterBus(ctx));
 
-    osc.onended = () => {
-      try {
-        osc.disconnect();
-        oscGain.disconnect();
-      } catch {}
-    };
-
-    osc.start(time);
-    osc.stop(time + 0.13);
+    let noiseNode: any = null;
+    let noiseGainNode: any = null;
 
     // Noise snap
     if (this.noiseBuffer) {
@@ -306,6 +333,9 @@ export class AudioBridge {
       filter.connect(noiseGain);
       noiseGain.connect(this.getMasterBus(ctx));
 
+      noiseNode = noise;
+      noiseGainNode = noiseGain;
+
       noise.onended = () => {
         try {
           noise.disconnect();
@@ -317,9 +347,42 @@ export class AudioBridge {
       noise.start(time);
       noise.stop(time + dur + 0.01);
     }
+
+    const stopFn = (fadeTime: number) => {
+      try {
+        const ft = Math.max(ctx.currentTime, fadeTime);
+        oscGain.gain.cancelScheduledValues(ft);
+        oscGain.gain.setValueAtTime(oscGain.gain.value, ft);
+        oscGain.gain.linearRampToValueAtTime(0, ft + 0.003);
+        osc.stop(ft + 0.005);
+        if (noiseNode && noiseGainNode) {
+          noiseGainNode.gain.cancelScheduledValues(ft);
+          noiseGainNode.gain.setValueAtTime(noiseGainNode.gain.value, ft);
+          noiseGainNode.gain.linearRampToValueAtTime(0, ft + 0.003);
+          noiseNode.stop(ft + 0.005);
+        }
+      } catch {}
+    };
+    this.drumVoices.set("sd", stopFn);
+
+    osc.onended = () => {
+      try {
+        osc.disconnect();
+        oscGain.disconnect();
+      } catch {}
+      if (this.drumVoices.get("sd") === stopFn) {
+        this.drumVoices.delete("sd");
+      }
+    };
+
+    osc.start(time);
+    osc.stop(time + 0.13);
   }
 
   private playHiHat(ctx: AudioContext, time: number, gainVal: number, open: boolean): void {
+    // Choke previous hat (open hats choked by closed hats or next open hat)
+    this.drumVoices.get("hat")?.(time);
+
     const dur = open ? 0.35 : 0.06;
     if (!this.noiseBuffer) return;
 
@@ -339,12 +402,26 @@ export class AudioBridge {
     filter.connect(gain);
     gain.connect(this.getMasterBus(ctx));
 
+    const stopFn = (fadeTime: number) => {
+      try {
+        const ft = Math.max(ctx.currentTime, fadeTime);
+        gain.gain.cancelScheduledValues(ft);
+        gain.gain.setValueAtTime(gain.gain.value, ft);
+        gain.gain.linearRampToValueAtTime(0, ft + 0.003);
+        noise.stop(ft + 0.005);
+      } catch {}
+    };
+    this.drumVoices.set("hat", stopFn);
+
     noise.onended = () => {
       try {
         noise.disconnect();
         filter.disconnect();
         gain.disconnect();
       } catch {}
+      if (this.drumVoices.get("hat") === stopFn) {
+        this.drumVoices.delete("hat");
+      }
     };
 
     noise.start(time);
@@ -352,6 +429,8 @@ export class AudioBridge {
   }
 
   private playClap(ctx: AudioContext, time: number, gainVal: number): void {
+    this.drumVoices.get("cp")?.(time);
+
     if (!this.noiseBuffer) return;
     const offsets = [0, 0.012, 0.024];
     for (const offset of offsets) {
@@ -398,12 +477,26 @@ export class AudioBridge {
     tailFilter.connect(tailGain);
     tailGain.connect(this.getMasterBus(ctx));
 
+    const stopFn = (fadeTime: number) => {
+      try {
+        const ft = Math.max(ctx.currentTime, fadeTime);
+        tailGain.gain.cancelScheduledValues(ft);
+        tailGain.gain.setValueAtTime(tailGain.gain.value, ft);
+        tailGain.gain.linearRampToValueAtTime(0, ft + 0.003);
+        tailNoise.stop(ft + 0.005);
+      } catch {}
+    };
+    this.drumVoices.set("cp", stopFn);
+
     tailNoise.onended = () => {
       try {
         tailNoise.disconnect();
         tailFilter.disconnect();
         tailGain.disconnect();
       } catch {}
+      if (this.drumVoices.get("cp") === stopFn) {
+        this.drumVoices.delete("cp");
+      }
     };
 
     tailNoise.start(time + 0.03);
@@ -411,6 +504,8 @@ export class AudioBridge {
   }
 
   private playRimshot(ctx: AudioContext, time: number, gainVal: number): void {
+    this.drumVoices.get("rim")?.(time);
+
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "triangle";
@@ -424,11 +519,25 @@ export class AudioBridge {
     osc.connect(gain);
     gain.connect(this.getMasterBus(ctx));
 
+    const stopFn = (fadeTime: number) => {
+      try {
+        const ft = Math.max(ctx.currentTime, fadeTime);
+        gain.gain.cancelScheduledValues(ft);
+        gain.gain.setValueAtTime(gain.gain.value, ft);
+        gain.gain.linearRampToValueAtTime(0, ft + 0.003);
+        osc.stop(ft + 0.005);
+      } catch {}
+    };
+    this.drumVoices.set("rim", stopFn);
+
     osc.onended = () => {
       try {
         osc.disconnect();
         gain.disconnect();
       } catch {}
+      if (this.drumVoices.get("rim") === stopFn) {
+        this.drumVoices.delete("rim");
+      }
     };
 
     osc.start(time);
@@ -436,6 +545,8 @@ export class AudioBridge {
   }
 
   private playCowbell(ctx: AudioContext, time: number, gainVal: number): void {
+    this.drumVoices.get("cb")?.(time);
+
     const dur = 0.2;
     const osc1 = ctx.createOscillator();
     const osc2 = ctx.createOscillator();
@@ -460,6 +571,18 @@ export class AudioBridge {
     filter.connect(gain);
     gain.connect(this.getMasterBus(ctx));
 
+    const stopFn = (fadeTime: number) => {
+      try {
+        const ft = Math.max(ctx.currentTime, fadeTime);
+        gain.gain.cancelScheduledValues(ft);
+        gain.gain.setValueAtTime(gain.gain.value, ft);
+        gain.gain.linearRampToValueAtTime(0, ft + 0.003);
+        osc1.stop(ft + 0.005);
+        osc2.stop(ft + 0.005);
+      } catch {}
+    };
+    this.drumVoices.set("cb", stopFn);
+
     osc1.onended = () => {
       try {
         osc1.disconnect();
@@ -467,6 +590,9 @@ export class AudioBridge {
         filter.disconnect();
         gain.disconnect();
       } catch {}
+      if (this.drumVoices.get("cb") === stopFn) {
+        this.drumVoices.delete("cb");
+      }
     };
 
     osc1.start(time);
@@ -480,8 +606,19 @@ export class AudioBridge {
     time: number,
     freq: number,
     gainVal: number,
-    val: any
+    val: any,
+    hap?: any,
+    safeCps: number = 0.5
   ): void {
+    // Polyphony cap: maximum 14 concurrent synth voices prevents CoreAudio buffer underruns
+    if (this.activeSynthVoices.size >= 14) {
+      const oldest = this.activeSynthVoices.values().next().value;
+      if (oldest) {
+        oldest(time);
+        this.activeSynthVoices.delete(oldest);
+      }
+    }
+
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     const filter = ctx.createBiquadFilter();
@@ -492,7 +629,7 @@ export class AudioBridge {
     let attack = typeof val.attack === "number" ? Math.max(0.005, Math.min(1.0, val.attack)) : 0.01;
     let decay = typeof val.decay === "number" ? Math.max(0.01, Math.min(2.0, val.decay)) : 0.15;
     let sustain = typeof val.sustain === "number" ? Math.max(0.0, Math.min(1.0, val.sustain)) : 0.5;
-    let release = typeof val.release === "number" ? Math.max(0.01, Math.min(2.0, val.release)) : 0.2;
+    let release = typeof val.release === "number" ? Math.max(0.01, Math.min(2.0, val.release)) : 0.1;
 
     if (["sine", "square", "sawtooth", "triangle"].includes(sType)) {
       osc.type = sType as OscillatorType;
@@ -509,7 +646,7 @@ export class AudioBridge {
       osc.type = "sawtooth";
       attack = 0.05;
       sustain = 0.7;
-      release = 0.4;
+      release = 0.3;
       defaultCutoff = 2500;
     } else {
       osc.type = "sawtooth";
@@ -527,9 +664,15 @@ export class AudioBridge {
     filter.frequency.setValueAtTime(cutoff, time);
     filter.Q.setValueAtTime(resonance, time);
 
-    const noteDuration = typeof val.duration === "number" ? Math.max(0.05, Math.min(5.0, val.duration)) : 0.3;
+    // Compute true note duration from Strudel hap
+    const rawDur = hap?.duration ?? (hap?.whole ? Number(hap.whole.end) - Number(hap.whole.begin) : 0.25);
+    const hapDurationCycles = Number(rawDur) || 0.25;
+    const calculatedDuration = typeof val.duration === "number"
+      ? val.duration
+      : Math.max(0.04, Math.min(2.0, hapDurationCycles / safeCps));
+    const noteDuration = calculatedDuration;
 
-    // Guaranteed strictly monotonic timeline:
+    // Strictly monotonic timeline:
     // t0 (start) < t1 (attack peak) < t2 (decay end) <= t3 (note end / sustain hold) < t4 (release end)
     const baseGain = Math.max(0.0001, gainVal);
     const susGain = Math.max(0.0001, baseGain * sustain);
@@ -552,16 +695,28 @@ export class AudioBridge {
     filter.connect(gain);
     gain.connect(this.getMasterBus(ctx));
 
+    const stopFn = (fadeTime: number) => {
+      try {
+        const ft = Math.max(ctx.currentTime, fadeTime);
+        gain.gain.cancelScheduledValues(ft);
+        gain.gain.setValueAtTime(gain.gain.value, ft);
+        gain.gain.linearRampToValueAtTime(0, ft + 0.004);
+        osc.stop(ft + 0.006);
+      } catch {}
+    };
+    this.activeSynthVoices.add(stopFn);
+
     osc.onended = () => {
       try {
         osc.disconnect();
         filter.disconnect();
         gain.disconnect();
       } catch {}
+      this.activeSynthVoices.delete(stopFn);
     };
 
     osc.start(t0);
-    osc.stop(t4 + 0.02);
+    osc.stop(t4 + 0.01);
   }
 
   private broadcastBrowser(haps: any[]): void {
