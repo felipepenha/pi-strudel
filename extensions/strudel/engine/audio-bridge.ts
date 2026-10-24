@@ -7,6 +7,8 @@ import dgram from "node:dgram";
 export class AudioBridge {
   private mode: AudioMode = "node";
   private audioCtx: AudioContext | null = null;
+  private masterGain: any = null;
+  private limiter: any = null;
   private noiseBuffer: any = null;
   private wss: WebSocketServer | null = null;
   private udpSocket: dgram.Socket | null = null;
@@ -37,13 +39,42 @@ export class AudioBridge {
         if (this.audioCtx.state === "suspended") {
           this.audioCtx.resume().catch(() => {});
         }
+
+        // Master Gain Bus
+        this.masterGain = this.audioCtx.createGain();
+        this.masterGain.gain.setValueAtTime(0.45, this.audioCtx.currentTime);
+
+        // Brickwall Limiter to prevent clipping / distortion bursts
+        this.limiter = (this.audioCtx as any).createDynamicsCompressor?.() || null;
+        if (this.limiter) {
+          this.limiter.threshold.setValueAtTime(-2.0, this.audioCtx.currentTime);
+          this.limiter.knee.setValueAtTime(0.0, this.audioCtx.currentTime);
+          this.limiter.ratio.setValueAtTime(20.0, this.audioCtx.currentTime);
+          this.limiter.attack.setValueAtTime(0.002, this.audioCtx.currentTime);
+          this.limiter.release.setValueAtTime(0.08, this.audioCtx.currentTime);
+
+          this.masterGain.connect(this.limiter);
+          this.limiter.connect(this.audioCtx.destination);
+        } else {
+          this.masterGain.connect(this.audioCtx.destination);
+        }
+
         this.createNoiseBuffer();
       } catch (err) {
         // If system audio is unavailable in headless environment
         this.audioCtx = null;
+        this.masterGain = null;
+        this.limiter = null;
       }
     }
     return this.audioCtx;
+  }
+
+  private getMasterBus(ctx: AudioContext): any {
+    if (this.masterGain) {
+      return this.masterGain;
+    }
+    return ctx.destination;
   }
 
   private createNoiseBuffer(): void {
@@ -84,7 +115,7 @@ export class AudioBridge {
     }
   }
 
-  dispatchHaps(haps: any[], _timeSec: number): void {
+  dispatchHaps(haps: any[], referenceCycle?: number, cps: number = 0.5): void {
     if (!haps || haps.length === 0) return;
 
     if (this.mode === "browser") {
@@ -101,48 +132,65 @@ export class AudioBridge {
     const ctx = this.initAudioContext();
     if (!ctx) return;
 
-    for (const hap of haps) {
+    // Polyphonic voice limiter to avoid event bursts / lag spikes
+    const MAX_VOICES_PER_TICK = 16;
+    const activeHaps = haps.length > MAX_VOICES_PER_TICK ? haps.slice(0, MAX_VOICES_PER_TICK) : haps;
+
+    // Dynamic polyphonic headroom scaling
+    const polyScale = activeHaps.length > 3 ? Math.sqrt(3 / activeHaps.length) : 1.0;
+
+    const baseLookahead = 0.03; // 30ms lookahead for smooth jitter-free WebAudio scheduling
+    const isCycleNumber = typeof referenceCycle === "number" && referenceCycle < 100000;
+    const refCycle = isCycleNumber ? referenceCycle : 0;
+    const safeCps = Math.max(0.01, cps);
+
+    for (const hap of activeHaps) {
       try {
-        this.playHapNodeAudio(ctx, hap);
+        const hapBegin = Number(hap.whole?.begin ?? hap.part?.begin ?? refCycle);
+        const cycleDelta = Math.max(0, hapBegin - refCycle);
+        const timeOffsetSec = isCycleNumber ? cycleDelta / safeCps : 0;
+        const scheduledTime = Math.max(ctx.currentTime + 0.015, ctx.currentTime + baseLookahead + timeOffsetSec);
+
+        this.playHapNodeAudio(ctx, hap, scheduledTime, polyScale);
       } catch (e) {
         // Voice failure should not crash scheduler
       }
     }
   }
 
-  private playHapNodeAudio(ctx: AudioContext, hap: any): void {
+  private playHapNodeAudio(ctx: AudioContext, hap: any, scheduledTime: number, polyScale: number): void {
     const val = hap.value || {};
-    const now = ctx.currentTime;
-    const gainVal = typeof val.gain === "number" ? Math.max(0, Math.min(val.gain, 2)) : 0.4;
+    const rawGain = typeof val.gain === "number" ? Math.max(0, Math.min(val.gain, 1.5)) : 0.4;
+    const gainVal = Math.max(0.001, rawGain * polyScale);
     const sound = String(val.s || val.sound || "").toLowerCase();
 
     // Check synthesized drum sound
     if (sound === "bd") {
-      this.playKick(ctx, now, gainVal, val);
+      this.playKick(ctx, scheduledTime, gainVal, val);
       return;
     }
     if (sound === "sd") {
-      this.playSnare(ctx, now, gainVal, val);
+      this.playSnare(ctx, scheduledTime, gainVal, val);
       return;
     }
     if (sound === "hh") {
-      this.playHiHat(ctx, now, gainVal, false);
+      this.playHiHat(ctx, scheduledTime, gainVal, false);
       return;
     }
     if (sound === "oh") {
-      this.playHiHat(ctx, now, gainVal, true);
+      this.playHiHat(ctx, scheduledTime, gainVal, true);
       return;
     }
     if (sound === "cp") {
-      this.playClap(ctx, now, gainVal);
+      this.playClap(ctx, scheduledTime, gainVal);
       return;
     }
     if (sound === "rim") {
-      this.playRimshot(ctx, now, gainVal);
+      this.playRimshot(ctx, scheduledTime, gainVal);
       return;
     }
     if (sound === "cb") {
-      this.playCowbell(ctx, now, gainVal);
+      this.playCowbell(ctx, scheduledTime, gainVal);
       return;
     }
 
@@ -157,11 +205,13 @@ export class AudioBridge {
       }
     } else if (val.n !== undefined) {
       const midi = 60 + Number(val.n);
-      freq = midiToFreq(midi);
+      if (!isNaN(midi)) {
+        freq = midiToFreq(midi);
+      }
     }
 
-    if (freq > 0) {
-      this.playSynthNote(ctx, now, freq, gainVal, val);
+    if (freq >= 20 && freq <= 12000) {
+      this.playSynthNote(ctx, scheduledTime, freq, gainVal, val);
     }
   }
 
@@ -169,22 +219,22 @@ export class AudioBridge {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
-    const startFreq = typeof val.penv === "number" ? 150 * Math.pow(2, val.penv / 12) : 150;
+    const startFreq = typeof val.penv === "number" ? Math.max(50, Math.min(600, 150 * Math.pow(2, val.penv / 12))) : 150;
     const endFreq = 42;
-    const decay = typeof val.pdecay === "number" ? val.pdecay : 0.08;
-    const dur = typeof val.decay === "number" ? val.decay : 0.28;
+    const decay = typeof val.pdecay === "number" ? Math.max(0.02, Math.min(0.5, val.pdecay)) : 0.08;
+    const dur = typeof val.decay === "number" ? Math.max(decay + 0.05, Math.min(1.0, val.decay)) : 0.28;
 
     osc.frequency.setValueAtTime(startFreq, time);
     osc.frequency.exponentialRampToValueAtTime(endFreq, time + decay);
 
-    gain.gain.setValueAtTime(gainVal, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    gain.gain.setValueAtTime(Math.max(0.0001, gainVal), time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
 
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(this.getMasterBus(ctx));
 
     osc.start(time);
-    osc.stop(time + dur);
+    osc.stop(time + dur + 0.01);
   }
 
   private playSnare(ctx: AudioContext, time: number, gainVal: number, _val: any): void {
@@ -195,12 +245,12 @@ export class AudioBridge {
     const oscGain = ctx.createGain();
     osc.frequency.setValueAtTime(180, time);
     osc.frequency.exponentialRampToValueAtTime(80, time + 0.1);
-    oscGain.gain.setValueAtTime(gainVal * 0.7, time);
-    oscGain.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
+    oscGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.7), time);
+    oscGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.12);
     osc.connect(oscGain);
-    oscGain.connect(ctx.destination);
+    oscGain.connect(this.getMasterBus(ctx));
     osc.start(time);
-    osc.stop(time + 0.12);
+    osc.stop(time + 0.13);
 
     // Noise snap
     if (this.noiseBuffer) {
@@ -211,15 +261,15 @@ export class AudioBridge {
       filter.frequency.setValueAtTime(1000, time);
 
       const noiseGain = ctx.createGain();
-      noiseGain.gain.setValueAtTime(gainVal * 0.8, time);
-      noiseGain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+      noiseGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.8), time);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
 
       noise.connect(filter);
       filter.connect(noiseGain);
-      noiseGain.connect(ctx.destination);
+      noiseGain.connect(this.getMasterBus(ctx));
 
       noise.start(time);
-      noise.stop(time + dur);
+      noise.stop(time + dur + 0.01);
     }
   }
 
@@ -235,15 +285,15 @@ export class AudioBridge {
     filter.frequency.setValueAtTime(7500, time);
 
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(gainVal * (open ? 0.6 : 0.4), time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    gain.gain.setValueAtTime(Math.max(0.0001, gainVal * (open ? 0.5 : 0.35)), time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(this.getMasterBus(ctx));
 
     noise.start(time);
-    noise.stop(time + dur);
+    noise.stop(time + dur + 0.01);
   }
 
   private playClap(ctx: AudioContext, time: number, gainVal: number): void {
@@ -258,15 +308,15 @@ export class AudioBridge {
       filter.frequency.setValueAtTime(1200, time + offset);
 
       const gain = ctx.createGain();
-      gain.gain.setValueAtTime(gainVal * 0.6, time + offset);
-      gain.gain.exponentialRampToValueAtTime(0.001, time + offset + 0.04);
+      gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.5), time + offset);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + offset + 0.04);
 
       noise.connect(filter);
       filter.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(this.getMasterBus(ctx));
 
       noise.start(time + offset);
-      noise.stop(time + offset + 0.04);
+      noise.stop(time + offset + 0.05);
     }
 
     // Tail
@@ -276,15 +326,15 @@ export class AudioBridge {
     tailFilter.type = "bandpass";
     tailFilter.frequency.setValueAtTime(1000, time + 0.03);
     const tailGain = ctx.createGain();
-    tailGain.gain.setValueAtTime(gainVal * 0.7, time + 0.03);
-    tailGain.gain.exponentialRampToValueAtTime(0.001, time + 0.22);
+    tailGain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.6), time + 0.03);
+    tailGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.22);
 
     tailNoise.connect(tailFilter);
     tailFilter.connect(tailGain);
-    tailGain.connect(ctx.destination);
+    tailGain.connect(this.getMasterBus(ctx));
 
     tailNoise.start(time + 0.03);
-    tailNoise.stop(time + 0.22);
+    tailNoise.stop(time + 0.23);
   }
 
   private playRimshot(ctx: AudioContext, time: number, gainVal: number): void {
@@ -294,14 +344,14 @@ export class AudioBridge {
     osc.frequency.setValueAtTime(1600, time);
     osc.frequency.exponentialRampToValueAtTime(400, time + 0.03);
 
-    gain.gain.setValueAtTime(gainVal * 0.7, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
+    gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.6), time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.04);
 
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(this.getMasterBus(ctx));
 
     osc.start(time);
-    osc.stop(time + 0.04);
+    osc.stop(time + 0.05);
   }
 
   private playCowbell(ctx: AudioContext, time: number, gainVal: number): void {
@@ -320,18 +370,18 @@ export class AudioBridge {
     filter.frequency.setValueAtTime(1000, time);
     filter.Q.setValueAtTime(3, time);
 
-    gain.gain.setValueAtTime(gainVal * 0.6, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    gain.gain.setValueAtTime(Math.max(0.0001, gainVal * 0.5), time);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
 
     osc1.connect(filter);
     osc2.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(this.getMasterBus(ctx));
 
     osc1.start(time);
     osc2.start(time);
-    osc1.stop(time + dur);
-    osc2.stop(time + dur);
+    osc1.stop(time + dur + 0.01);
+    osc2.stop(time + dur + 0.01);
   }
 
   private playSynthNote(
@@ -348,10 +398,10 @@ export class AudioBridge {
     // Sound type & instrument shaping
     const sType = String(val.s || "sawtooth").toLowerCase();
     let defaultCutoff = 4000;
-    let attack = typeof val.attack === "number" ? val.attack : 0.01;
-    let decay = typeof val.decay === "number" ? val.decay : 0.15;
-    let sustain = typeof val.sustain === "number" ? val.sustain : 0.5;
-    let release = typeof val.release === "number" ? val.release : 0.2;
+    let attack = typeof val.attack === "number" ? Math.max(0.005, Math.min(1.0, val.attack)) : 0.01;
+    let decay = typeof val.decay === "number" ? Math.max(0.01, Math.min(2.0, val.decay)) : 0.15;
+    let sustain = typeof val.sustain === "number" ? Math.max(0.0, Math.min(1.0, val.sustain)) : 0.5;
+    let release = typeof val.release === "number" ? Math.max(0.01, Math.min(2.0, val.release)) : 0.2;
 
     if (["sine", "square", "sawtooth", "triangle"].includes(sType)) {
       osc.type = sType as OscillatorType;
@@ -377,26 +427,42 @@ export class AudioBridge {
     osc.frequency.setValueAtTime(freq, time);
 
     // Filter
-    const cutoff = typeof val.cutoff === "number" ? val.cutoff : (typeof val.lpf === "number" ? val.lpf : defaultCutoff);
-    const resonance = typeof val.resonance === "number" ? val.resonance : (typeof val.lpq === "number" ? val.lpq : 1);
+    const rawCutoff = typeof val.cutoff === "number" ? val.cutoff : (typeof val.lpf === "number" ? val.lpf : defaultCutoff);
+    const cutoff = Math.max(40, Math.min(18000, rawCutoff));
+    const rawRes = typeof val.resonance === "number" ? val.resonance : (typeof val.lpq === "number" ? val.lpq : 1);
+    const resonance = Math.max(0.1, Math.min(15, rawRes));
+
     filter.type = "lowpass";
     filter.frequency.setValueAtTime(cutoff, time);
     filter.Q.setValueAtTime(resonance, time);
 
-    const noteDuration = typeof val.duration === "number" ? val.duration : 0.3;
+    const noteDuration = typeof val.duration === "number" ? Math.max(0.05, Math.min(5.0, val.duration)) : 0.3;
 
-    gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(gainVal, time + attack);
-    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, gainVal * sustain), time + attack + decay);
-    gain.gain.setValueAtTime(Math.max(0.0001, gainVal * sustain), time + noteDuration);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + noteDuration + release);
+    // Guaranteed strictly monotonic timeline:
+    // t0 (start) < t1 (attack peak) < t2 (decay end) <= t3 (note end / sustain hold) < t4 (release end)
+    const baseGain = Math.max(0.0001, gainVal);
+    const susGain = Math.max(0.0001, baseGain * sustain);
+
+    const t0 = time;
+    const t1 = t0 + attack;
+    const t2 = t1 + decay;
+    const t3 = Math.max(t2, t0 + noteDuration);
+    const t4 = t3 + release;
+
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(baseGain, t1);
+    gain.gain.exponentialRampToValueAtTime(susGain, t2);
+    if (t3 > t2) {
+      gain.gain.setValueAtTime(susGain, t3);
+    }
+    gain.gain.exponentialRampToValueAtTime(0.0001, t4);
 
     osc.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(this.getMasterBus(ctx));
 
-    osc.start(time);
-    osc.stop(time + noteDuration + release + 0.01);
+    osc.start(t0);
+    osc.stop(t4 + 0.02);
   }
 
   private broadcastBrowser(haps: any[]): void {
@@ -425,6 +491,8 @@ export class AudioBridge {
         await this.audioCtx.close();
       } catch {}
       this.audioCtx = null;
+      this.masterGain = null;
+      this.limiter = null;
     }
     if (this.wss) {
       try {

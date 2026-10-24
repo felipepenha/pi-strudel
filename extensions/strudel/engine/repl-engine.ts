@@ -257,11 +257,19 @@ export class ReplEngine {
     const nowCycle = this.getCurrentCycle();
     this.currentCycle = nowCycle;
 
+    // Prevent catch-up burst on event-loop lag: if the cycle advanced by more than 0.25 cycles (e.g. LLM inference pause),
+    // clamp lastDispatchedCycle so we skip past cycles instead of dumping dozens of accumulated notes into the audio bus at once
+    const maxLagWindowCycles = 0.25;
+    if (nowCycle - this.lastDispatchedCycle > maxLagWindowCycles) {
+      this.lastDispatchedCycle = nowCycle - 0.05;
+    }
+
     if (this.masterPattern && nowCycle > this.lastDispatchedCycle) {
       try {
         const haps = this.masterPattern.queryArc(this.lastDispatchedCycle, nowCycle);
         if (haps && haps.length > 0) {
-          this.audioBridge.dispatchHaps(haps, Date.now() / 1000);
+          const cps = this.stateStore.getCps() || 0.5;
+          this.audioBridge.dispatchHaps(haps, this.lastDispatchedCycle, cps);
         }
       } catch (err) {
         console.error("Error during master pattern dispatch:", err);

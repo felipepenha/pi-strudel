@@ -65,4 +65,48 @@ describe("Phase 3: Strudel Pattern Engine", () => {
     engine.nudge(100); // 100ms forward
     expect(engine.getCurrentCycle()).toBeGreaterThanOrEqual(initialCycle);
   });
+
+  it("prevents audio bursts on lag spikes by clamping backlog", () => {
+    const store = new StateStore();
+    const bridge = new AudioBridge();
+    let dispatchedCount = 0;
+    bridge.dispatchHaps = (haps: any[]) => {
+      dispatchedCount += haps.length;
+    };
+
+    const engine = new ReplEngine(store, bridge);
+    store.setTrack("d1", 's("bd*16")');
+    engine.recompileAll();
+
+    // Start engine
+    engine.start();
+
+    // Simulate a 2-second event loop stall (e.g. LLM inference)
+    (engine as any).lastDispatchedCycle = 0;
+    (engine as any).startCycleOffset = 2.0; // cycle is now 2.0+
+
+    // Trigger tick
+    (engine as any).tick();
+
+    // Verify that lastDispatchedCycle was clamped to skip old history
+    expect((engine as any).lastDispatchedCycle).toBeGreaterThan(1.5);
+    engine.stop();
+  });
+
+  it("safely handles AudioBridge master limiter and polyphonic dispatch", async () => {
+    const bridge = new AudioBridge("node");
+    const testHaps = [
+      { whole: { begin: 0, end: 0.25 }, value: { s: "bd", gain: 1.2 } },
+      { whole: { begin: 0, end: 0.25 }, value: { s: "hh", gain: 0.9 } },
+      { whole: { begin: 0, end: 0.25 }, value: { note: "c3", s: "sawtooth", gain: 0.8 } },
+      { whole: { begin: 0, end: 0.25 }, value: { note: "eb3", s: "sawtooth", gain: 0.8 } },
+      { whole: { begin: 0, end: 0.25 }, value: { note: "g3", s: "sawtooth", gain: 0.8 } },
+    ];
+
+    expect(() => {
+      bridge.dispatchHaps(testHaps, 0, 0.5);
+    }).not.toThrow();
+
+    await bridge.dispose();
+  });
 });
