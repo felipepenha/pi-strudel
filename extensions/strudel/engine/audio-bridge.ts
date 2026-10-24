@@ -345,10 +345,31 @@ export class AudioBridge {
     const gain = ctx.createGain();
     const filter = ctx.createBiquadFilter();
 
-    // Sound type
+    // Sound type & instrument shaping
     const sType = String(val.s || "sawtooth").toLowerCase();
+    let defaultCutoff = 4000;
+    let attack = typeof val.attack === "number" ? val.attack : 0.01;
+    let decay = typeof val.decay === "number" ? val.decay : 0.15;
+    let sustain = typeof val.sustain === "number" ? val.sustain : 0.5;
+    let release = typeof val.release === "number" ? val.release : 0.2;
+
     if (["sine", "square", "sawtooth", "triangle"].includes(sType)) {
       osc.type = sType as OscillatorType;
+    } else if (sType.includes("piano") || sType.includes("epiano") || sType.includes("rhodes") || sType.includes("keys")) {
+      osc.type = "sine";
+      attack = 0.005;
+      decay = 0.4;
+      sustain = 0.2;
+      defaultCutoff = 6000;
+    } else if (sType.includes("bass")) {
+      osc.type = "triangle";
+      defaultCutoff = 900;
+    } else if (sType.includes("violin") || sType.includes("strings") || sType.includes("pad")) {
+      osc.type = "sawtooth";
+      attack = 0.05;
+      sustain = 0.7;
+      release = 0.4;
+      defaultCutoff = 2500;
     } else {
       osc.type = "sawtooth";
     }
@@ -356,17 +377,12 @@ export class AudioBridge {
     osc.frequency.setValueAtTime(freq, time);
 
     // Filter
-    const cutoff = typeof val.cutoff === "number" ? val.cutoff : (typeof val.lpf === "number" ? val.lpf : 4000);
+    const cutoff = typeof val.cutoff === "number" ? val.cutoff : (typeof val.lpf === "number" ? val.lpf : defaultCutoff);
     const resonance = typeof val.resonance === "number" ? val.resonance : (typeof val.lpq === "number" ? val.lpq : 1);
     filter.type = "lowpass";
     filter.frequency.setValueAtTime(cutoff, time);
     filter.Q.setValueAtTime(resonance, time);
 
-    // ADSR Envelopes
-    const attack = typeof val.attack === "number" ? val.attack : 0.01;
-    const decay = typeof val.decay === "number" ? val.decay : 0.15;
-    const sustain = typeof val.sustain === "number" ? val.sustain : 0.5;
-    const release = typeof val.release === "number" ? val.release : 0.2;
     const noteDuration = typeof val.duration === "number" ? val.duration : 0.3;
 
     gain.gain.setValueAtTime(0.0001, time);
