@@ -45,10 +45,29 @@ export class AudioBridge {
           ctx.resume().catch(() => {});
         }
 
-        // Master Gain Bus
+        // Master Gain Bus with headroom for multi-track polyphony
         this.masterGain = ctx.createGain();
-        this.masterGain.gain.setValueAtTime(0.45, ctx.currentTime);
-        this.masterGain.connect(ctx.destination);
+        this.masterGain.gain.setValueAtTime(0.32, ctx.currentTime);
+
+        // Brickwall soft-saturation waveshaper: mathematically guarantees signal never clips (+/-1.0)
+        // Completely protects speakers and ears from harsh digital clipping distortion
+        const shaper = (ctx as any).createWaveShaper?.();
+        if (shaper) {
+          const nSamples = 4096;
+          const curve = new Float32Array(nSamples);
+          for (let i = 0; i < nSamples; ++i) {
+            const x = (i * 2) / nSamples - 1;
+            // Smooth hyperbolic tangent transfer curve
+            curve[i] = Math.tanh(x * 1.35);
+          }
+          shaper.curve = curve;
+          shaper.oversample = "none";
+
+          this.masterGain.connect(shaper);
+          shaper.connect(ctx.destination);
+        } else {
+          this.masterGain.connect(ctx.destination);
+        }
 
         this.createNoiseBuffer();
       } catch (err) {
@@ -72,7 +91,7 @@ export class AudioBridge {
     if (this.masterGain && this.audioCtx) {
       try {
         this.masterGain.gain.setValueAtTime(0, this.audioCtx.currentTime);
-        this.masterGain.gain.setValueAtTime(0.45, this.audioCtx.currentTime + 0.05);
+        this.masterGain.gain.setValueAtTime(0.32, this.audioCtx.currentTime + 0.05);
       } catch {}
     }
     const now = this.audioCtx?.currentTime ?? 0;
@@ -158,7 +177,7 @@ export class AudioBridge {
     // Dynamic polyphonic headroom scaling
     const polyScale = activeHaps.length > 3 ? Math.sqrt(3 / activeHaps.length) : 1.0;
 
-    const baseLookahead = 0.06; // 60ms lookahead provides safety margin against buffer underruns
+    const baseLookahead = 0.1; // 100ms lookahead (matches official Strudel/Tidal scheduler latency)
     const isCycleNumber = typeof referenceCycle === "number" && referenceCycle < 100000;
     const refCycle = isCycleNumber ? referenceCycle : 0;
     const safeCps = Math.max(0.01, cps);
@@ -168,7 +187,7 @@ export class AudioBridge {
         const hapBegin = Number(hap.whole?.begin ?? hap.part?.begin ?? refCycle);
         const cycleDelta = Math.max(0, hapBegin - refCycle);
         const timeOffsetSec = isCycleNumber ? cycleDelta / safeCps : 0;
-        const scheduledTime = Math.max(ctx.currentTime + 0.02, ctx.currentTime + baseLookahead + timeOffsetSec);
+        const scheduledTime = Math.max(ctx.currentTime + 0.03, ctx.currentTime + baseLookahead + timeOffsetSec);
 
         this.playHapNodeAudio(ctx, hap, scheduledTime, polyScale, safeCps);
       } catch (e) {
