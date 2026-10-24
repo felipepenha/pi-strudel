@@ -51,6 +51,13 @@ declare module "@strudel/osc" {
   export const osc: (options?: any) => any;
 }
 
+declare module "chord-voicings" {
+  export const dictionaryVoicing: (options: any) => any;
+  export const minTopNoteDiff: any;
+  const all: any;
+  export default all;
+}
+
 declare module "node-web-audio-api" {
   export class AudioContext {
     currentTime: number;

@@ -6,6 +6,10 @@ import { transpiler } from "@strudel/transpiler";
 import { StateStore, globalStateStore } from "./state-store.js";
 import { AudioBridge, globalAudioBridge } from "./audio-bridge.js";
 import { highlightCode, type HighlightSpan } from "./highlighter.js";
+import chordVoicingsModule from "chord-voicings";
+
+const { dictionaryVoicing, minTopNoteDiff } =
+  (chordVoicingsModule as any)?.default || chordVoicingsModule;
 
 export interface CompiledTrack {
   id: string;
@@ -47,6 +51,70 @@ export class ReplEngine {
       setcpm: (cpm: number) => this.stateStore.setCps(cpm / 60),
       hush: () => this.stop(),
     };
+
+    // Register robust voicings that handle object values { chord: '...' }, rests (~), and fallback dictionaries
+    let lastVoicing: any;
+    (core as any).register("voicings", function (dictName: any, pat: any) {
+      const dictKey = typeof dictName === "string" ? dictName : "ireal";
+      const entry = (tonal as any).voicingRegistry?.[dictKey] || (tonal as any).voicingRegistry?.ireal;
+      const dictionary = entry?.dictionary || {};
+      const range = entry?.range || ["F3", "A4"];
+
+      return pat
+        .fmap((val: any) => {
+          const chord = typeof val === "string" ? val : (val?.chord || val?.value || "");
+          if (!chord || typeof chord !== "string" || chord === "~" || chord === "-") {
+            return (core as any).silence;
+          }
+          const clean = chord.trim();
+          try {
+            const voiced = dictionaryVoicing({
+              chord: clean,
+              dictionary,
+              range,
+              picker: minTopNoteDiff,
+              lastVoicing,
+            });
+            if (voiced && voiced.length > 0) {
+              lastVoicing = voiced;
+              return (core as any).stack(...voiced.map((n: string) => (core as any).note(n)));
+            }
+            if (dictKey !== "ireal" && (tonal as any).voicingRegistry?.ireal) {
+              const fallback = dictionaryVoicing({
+                chord: clean,
+                dictionary: (tonal as any).voicingRegistry.ireal.dictionary,
+                range,
+                picker: minTopNoteDiff,
+                lastVoicing,
+              });
+              if (fallback && fallback.length > 0) {
+                lastVoicing = fallback;
+                return (core as any).stack(...fallback.map((n: string) => (core as any).note(n)));
+              }
+            }
+            return (core as any).silence;
+          } catch {
+            return (core as any).silence;
+          }
+        })
+        .outerJoin();
+    });
+
+    (core as any).register("rootNotes", function (octave: any, pat: any) {
+      const oct = typeof octave === "number" ? octave : 3;
+      return pat
+        .fmap((val: any) => {
+          const chord = typeof val === "string" ? val : (val?.chord || val?.value || "");
+          if (!chord || typeof chord !== "string" || chord === "~" || chord === "-") {
+            return (core as any).silence;
+          }
+          const match = chord.trim().match(/^([a-gA-G][b#]?)/);
+          if (!match) return (core as any).silence;
+          const noteName = match[1].toLowerCase() + oct;
+          return (core as any).note(noteName);
+        })
+        .outerJoin();
+    });
 
     // React to state store updates
     this.stateStore.subscribe(() => {

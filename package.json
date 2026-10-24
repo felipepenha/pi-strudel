@@ -14,7 +14,7 @@
     "skills": ["skills/*/SKILL.md"]
   },
   "scripts": {
-    "postinstall": "node -e \"const fs=require('fs');const p='./node_modules/@kabelsalat/web/package.json';if(fs.existsSync(p)){const j=JSON.parse(fs.readFileSync(p,'utf8'));if(!j.exports){j.exports={import:'./dist/index.mjs',require:'./dist/index.js',default:'./dist/index.mjs'};fs.writeFileSync(p,JSON.stringify(j,null,2));}}\"",
+    "postinstall": "node -e \"const fs=require('fs');const p='./node_modules/@kabelsalat/web/package.json';if(fs.existsSync(p)){const j=JSON.parse(fs.readFileSync(p,'utf8'));if(!j.exports){j.exports={import:'./dist/index.mjs',require:'./dist/index.js',default:'./dist/index.mjs'};fs.writeFileSync(p,JSON.stringify(j,null,2));}}const tc='./node_modules/chord-voicings/dist/tokenizeChord.js';if(fs.existsSync(tc)){let s=fs.readFileSync(tc,'utf8');if(!s.includes('typeof chord===\\'object\\'')){s=s.replace('function tokenizeChord(chord) {','function tokenizeChord(chord) {if(chord&&typeof chord===\\'object\\'){chord=chord.chord||chord.value||\\'\\';}');fs.writeFileSync(tc,s);}}\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "dev": "pi -e ."
